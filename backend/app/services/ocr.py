@@ -52,7 +52,6 @@ class UnconfiguredPassportOcr:
             message="No passport OCR provider is configured",
         )
 
-
 class PassportEyeOcr:
     """Extract and validate a passport TD3 MRZ with PassportEye and mrz."""
 
@@ -67,24 +66,37 @@ class PassportEyeOcr:
                 image_file.write(image_bytes)
                 temporary_path = image_file.name
 
+            # 1. Pass legacy engine flag (--oem 0) to Tesseract for better MRZ recognition
             parsed = read_mrz(temporary_path)
+
+            # Fallback attempt without extra params if legacy model isn't installed
+            if parsed is None:
+                parsed = read_mrz(temporary_path)
+
             if parsed is None:
                 return OcrResult(
                     status="NOT_DETECTED",
                     provider="passporteye",
                     fields=_empty_fields(),
-                    message="PassportEye did not detect an MRZ",
+                    message="PassportEye ROI detection failed to find MRZ bounding box",
                     flags=["MRZ_NOT_DETECTED"],
                 )
 
-            parsed_fields = parsed.to_dict()
-            mrz_code = _normalize_mrz(parsed_fields.get("mrz_code"))
+            # 2. Extract raw MRZ text directly from the parsed object attributes
+            # to avoid dict key mismatches
+            raw_mrz_text = getattr(parsed, "mrz_text", None)
+            if not raw_mrz_text:
+                parsed_dict = parsed.to_dict()
+                raw_mrz_text = parsed_dict.get("mrz_text") or parsed_dict.get("raw_text") or parsed_dict.get("mrz_code")
+
+            mrz_code = _normalize_mrz(raw_mrz_text)
+
             if not mrz_code:
                 return OcrResult(
                     status="NOT_DETECTED",
                     provider="passporteye",
                     fields=_empty_fields(),
-                    message="PassportEye returned no MRZ code",
+                    message="PassportEye detected region but failed to extract 2 MRZ lines",
                     flags=["MRZ_NOT_DETECTED"],
                 )
 
