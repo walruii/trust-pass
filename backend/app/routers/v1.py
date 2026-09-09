@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import base64
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -34,12 +35,23 @@ class ApplicationStatusResponse(BaseModel):
     created_at: datetime
     result_json: dict | None = None
     error_message: str | None = None
+    decision_note: str | None = None
 
 
 class OfficerApplicationResponse(ApplicationStatusResponse):
     passport_image: str | None = None
     selfie_image: str | None = None
     review_fields: dict
+
+
+class OfficerDecisionPayload(BaseModel):
+    decision: Literal["APPROVED", "REJECTED_IMPROPER", "REJECTED_TAMPERING"]
+    decision_note: str | None = Field(default=None, max_length=2000)
+
+
+class OfficerDecisionResponse(BaseModel):
+    application_id: str
+    status: str
 
 
 @router.post(
@@ -92,6 +104,7 @@ async def get_application_status(
         created_at=application.created_at,
         result_json=application.result_json,
         error_message=application.error_message,
+        decision_note=application.decision_note,
     )
 
 
@@ -126,6 +139,41 @@ async def list_officer_applications(
         )
         for application in applications
     ]
+
+
+@router.post(
+    "/officer/applications/{application_id}/decision",
+    response_model=OfficerDecisionResponse,
+    tags=["Officer"],
+)
+async def decide_application(
+    application_id: str,
+    payload: OfficerDecisionPayload,
+    db: Session = Depends(get_db),
+):
+    application = db.get(Application, application_id)
+
+    if application is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found",
+        )
+
+    if application.status != "PENDING_AUDIT":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only applications pending audit can receive a decision",
+        )
+
+    application.status = payload.decision
+    application.decision_note = payload.decision_note.strip() if payload.decision_note else None
+    application.completed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {
+        "application_id": application.id,
+        "status": application.status,
+    }
 
 
 def _image_data_url(application: Application, image_type: str) -> str | None:

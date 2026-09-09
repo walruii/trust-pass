@@ -20,6 +20,7 @@ export function ScanHeader({ step }: { step: ScanStep }) {
     PENDING_AUDIT: "Application Pending Officer Review",
     FAILED: "Application Processing Failed",
     DONE: "Scan Completed Successfully",
+    REJECTED: "Application Requires Follow-up",
   };
 
   return (
@@ -190,6 +191,50 @@ export function ReviewState({
           Application ID: {applicationId}
         </p>
       )}
+    </div>
+  );
+}
+
+export function DecisionState({
+  approved,
+  note,
+  onExit,
+}: {
+  approved: boolean;
+  note?: string | null;
+  onExit: () => void;
+}) {
+  return (
+    <div className="max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-900 shadow-sm">
+      <div
+        className={`mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full text-2xl font-bold ${
+          approved
+            ? "bg-emerald-100 text-emerald-700"
+            : "bg-red-100 text-red-700"
+        }`}
+      >
+        {approved ? "✓" : "!"}
+      </div>
+      <h2 className="mb-2 text-xl font-bold">
+        {approved ? "Application Approved" : "Application Rejected"}
+      </h2>
+      <p className="text-sm text-slate-600">
+        {approved
+          ? "An officer has approved your application."
+          : "An officer could not approve your application."}
+      </p>
+      {!approved && note && (
+        <p className="mt-4 rounded-lg bg-red-50 p-3 text-left text-sm text-red-800">
+          Officer note: {note}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onExit}
+        className="mt-6 rounded-lg bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-700"
+      >
+        Exit and start a new application
+      </button>
     </div>
   );
 }

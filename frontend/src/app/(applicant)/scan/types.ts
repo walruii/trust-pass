@@ -5,10 +5,12 @@ export type ScanStep =
   | "PROCESSING"
   | "PENDING_AUDIT"
   | "FAILED"
-  | "DONE";
+  | "DONE"
+  | "REJECTED";
 
 export type ApplicationStatusResponse = {
   application_id: string;
   status: string;
   error_message?: string | null;
+  decision_note?: string | null;
 };

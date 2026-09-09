@@ -12,6 +12,7 @@ export type OfficerApplication = {
   created_at: string;
   result_json: Record<string, unknown> | null;
   error_message: string | null;
+  decision_note: string | null;
   passport_image: string | null;
   selfie_image: string | null;
   review_fields: Record<string, ReviewField>;

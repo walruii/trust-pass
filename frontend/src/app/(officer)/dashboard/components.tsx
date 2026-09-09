@@ -1,4 +1,5 @@
 import type { OfficerApplication, ReviewField } from "./types";
+import { useState } from "react";
 
 const fieldLabels: Record<string, string> = {
   date_of_birth: "Date of birth",
@@ -12,9 +13,18 @@ const fieldLabels: Record<string, string> = {
 
 export function ApplicationCard({
   application,
+  onDecision,
+  decisionPending,
 }: {
   application: OfficerApplication;
+  onDecision: (
+    applicationId: string,
+    decision: "APPROVED" | "REJECTED_IMPROPER" | "REJECTED_TAMPERING",
+    note: string,
+  ) => void;
+  decisionPending: boolean;
 }) {
+  const [decisionNote, setDecisionNote] = useState("");
   return (
     <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-6">
@@ -63,6 +73,66 @@ export function ApplicationCard({
           {JSON.stringify(application.result_json, null, 2)}
         </pre>
       </details>
+
+      <footer className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 bg-slate-50 px-6 py-4">
+        <div className="min-w-64 flex-1">
+          <label
+            htmlFor={`decision-note-${application.application_id}`}
+            className="text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            Decision note
+          </label>
+          <textarea
+            id={`decision-note-${application.application_id}`}
+            value={decisionNote}
+            onChange={(event) => setDecisionNote(event.target.value)}
+            placeholder="Add context for the audit record"
+            rows={2}
+            maxLength={2000}
+            className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-emerald-500 focus:ring-2"
+          />
+        </div>
+        <div className="flex flex-wrap justify-end gap-3">
+          <button
+            type="button"
+            disabled={decisionPending}
+            onClick={() =>
+              onDecision(
+                application.application_id,
+                "REJECTED_IMPROPER",
+                decisionNote,
+              )
+            }
+            className="rounded-lg border border-red-200 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-wait disabled:opacity-50"
+          >
+            Reject: improper application
+          </button>
+          <button
+            type="button"
+            disabled={decisionPending}
+            onClick={() =>
+              onDecision(
+                application.application_id,
+                "REJECTED_TAMPERING",
+                decisionNote,
+              )
+            }
+            className="rounded-lg border border-red-500 bg-red-50 px-4 py-2 text-sm font-semibold text-red-800 hover:bg-red-100 disabled:cursor-wait disabled:opacity-50"
+          >
+            Reject: tampering risk
+          </button>
+          <button
+            type="button"
+            disabled={decisionPending}
+            onClick={() =>
+              onDecision(application.application_id, "APPROVED", decisionNote)
+            }
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-wait disabled:opacity-50"
+          >
+            Approve
+          </button>
+        </div>
+      </footer>
     </article>
   );
 }

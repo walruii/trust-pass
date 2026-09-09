@@ -8,6 +8,7 @@ import {
   CameraCapture,
   ImageReview,
   ProcessingState,
+  DecisionState,
   ReviewState,
   ScanHeader,
 } from "./components";
@@ -16,6 +17,7 @@ import type { ApplicationStatusResponse, ScanStep } from "./types";
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const applicationStorageKey = "trust-pass.application-id";
+const applicationPollingIntervalMs = 15_000;
 
 export default function CameraScanner() {
   const webcamRef = useRef<Webcam>(null);
@@ -66,6 +68,7 @@ export default function CameraScanner() {
 
     const controller = new AbortController();
     let cancelled = false;
+    let pollingTimeout: number | undefined;
 
     const pollStatus = async () => {
       try {
@@ -89,9 +92,24 @@ export default function CameraScanner() {
           setStep("FAILED");
           return;
         }
+        if (data.status === "APPROVED") {
+          setStep("DONE");
+          return;
+        }
+        if (
+          data.status === "REJECTED_IMPROPER" ||
+          data.status === "REJECTED_TAMPERING"
+        ) {
+          setErrorMessage(data.decision_note ?? null);
+          setStep("REJECTED");
+          return;
+        }
 
         setStep("PROCESSING");
-        window.setTimeout(pollStatus, 2000);
+        pollingTimeout = window.setTimeout(
+          pollStatus,
+          applicationPollingIntervalMs,
+        );
       } catch (error) {
         if (controller.signal.aborted || cancelled) return;
         console.error("Status polling failed:", error);
@@ -104,6 +122,9 @@ export default function CameraScanner() {
     return () => {
       cancelled = true;
       controller.abort();
+      if (pollingTimeout !== undefined) {
+        window.clearTimeout(pollingTimeout);
+      }
     };
   }, [applicationId]);
 
@@ -191,6 +212,16 @@ export default function CameraScanner() {
           pending={false}
           errorMessage={errorMessage}
           applicationId={applicationId}
+        />
+      )}
+      {step === "DONE" && (
+        <DecisionState approved onExit={handleForgetApplication} />
+      )}
+      {step === "REJECTED" && (
+        <DecisionState
+          approved={false}
+          note={errorMessage}
+          onExit={handleForgetApplication}
         />
       )}
       <div className="mt-6">

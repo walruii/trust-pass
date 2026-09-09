@@ -11,6 +11,7 @@ const apiBaseUrl =
 export default function OfficerDashboard() {
   const [applications, setApplications] = useState<OfficerApplication[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [decisionPending, setDecisionPending] = useState<string | null>(null);
 
   const loadApplications = useCallback(async () => {
     try {
@@ -29,6 +30,39 @@ export default function OfficerDashboard() {
       setErrorMessage("Unable to load the officer queue.");
     }
   }, []);
+
+  const decideApplication = async (
+    applicationId: string,
+    decision: "APPROVED" | "REJECTED_IMPROPER" | "REJECTED_TAMPERING",
+    note: string,
+  ) => {
+    setDecisionPending(applicationId);
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/officer/applications/${applicationId}/decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision, decision_note: note || null }),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.detail ?? "Unable to save decision.");
+
+      setApplications((current) =>
+        current.filter(
+          (application) => application.application_id !== applicationId,
+        ),
+      );
+      setErrorMessage(null);
+    } catch (error) {
+      console.error("Officer decision failed:", error);
+      setErrorMessage("Unable to save the officer decision.");
+    } finally {
+      setDecisionPending(null);
+    }
+  };
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void loadApplications(), 0);
@@ -78,6 +112,8 @@ export default function OfficerDashboard() {
               <ApplicationCard
                 key={application.application_id}
                 application={application}
+                onDecision={decideApplication}
+                decisionPending={decisionPending === application.application_id}
               />
             ))}
           </div>
