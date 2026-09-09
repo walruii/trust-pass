@@ -8,6 +8,7 @@ from app.models.application import Application
 from app.models.user import User
 from app.models.lease import ApplicationLease
 from app.models.audit import ApplicationAuditEvent
+from app.services.ocr import get_ocr_runtime_status
 
 app = FastAPI(
     title="Trust Pass API",
@@ -48,5 +49,6 @@ async def status_get(db: Session = Depends(get_db)):
   return {
     "Backend": "online",
     "Database": db_status,
+    "OCR": get_ocr_runtime_status(),
   }
 

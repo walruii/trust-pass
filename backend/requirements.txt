@@ -1,0 +1,11 @@
+fastapi==0.141.1
+SQLAlchemy==2.0.52
+psycopg2-binary==2.9.12
+python-dotenv==1.2.3
+PyJWT==2.10.1
+bcrypt==5.0.0
+passporteye==2.2.2
+mrz==0.6.2
+easyocr==1.7.2
+opencv-python==4.13.0.92
+numpy==2.5.3

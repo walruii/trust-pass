@@ -501,11 +501,14 @@ def _image_data_url(application: Application, image_type: str) -> str | None:
 
 
 def _review_fields(application: Application) -> dict:
+    ocr_result = (application.result_json or {}).get("ocr", {})
+    ocr_fields = ocr_result.get("fields", {})
+
     return {
-        "date_of_birth": {"value": "Not implemented", "matched": None},
-        "name": {"value": "Not implemented", "matched": None},
-        "expiry": {"value": "Not implemented", "matched": None},
-        "passport_number": {"value": "Not implemented", "matched": None},
+        "date_of_birth": {"value": ocr_fields.get("date_of_birth"), "matched": None},
+        "name": {"value": ocr_fields.get("name"), "matched": None},
+        "expiry": {"value": ocr_fields.get("expiry"), "matched": None},
+        "passport_number": {"value": ocr_fields.get("passport_number"), "matched": None},
         "passport_exists_in_national_repository": {"value": "Not implemented", "matched": None},
         "face_match_score": {"value": None, "matched": None},
         "passport_anti_tamper_score": {"value": None, "matched": None},
