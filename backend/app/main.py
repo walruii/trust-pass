@@ -5,6 +5,7 @@ from app.db.session import Base, engine, get_db
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers.v1 import router as v1_router
 from app.models.application import Application
+from app.models.user import User
 
 app = FastAPI(
     title="Trust Pass API",

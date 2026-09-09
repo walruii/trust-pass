@@ -7,8 +7,10 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import create_access_token, verify_password, get_current_officer
 from app.db.session import get_db
 from app.models.application import Application
+from app.models.user import User
 from app.services.intake import create_application
 from app.services.pipeline import process_application
 
@@ -24,6 +26,24 @@ class KioskSubmitPayload(BaseModel):
 class KioskSubmitResponse(BaseModel):
     application_id: str
     status: str
+
+
+class LoginPayload(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=1)
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+    officer_id: str
+    display_name: str
+
+
+class CurrentOfficerResponse(BaseModel):
+    officer_id: str
+    display_name: str
+    role: str
 
 
 class ApplicationStatusResponse(BaseModel):
@@ -52,6 +72,39 @@ class OfficerDecisionPayload(BaseModel):
 class OfficerDecisionResponse(BaseModel):
     application_id: str
     status: str
+
+
+@router.post("/auth/login", response_model=LoginResponse, tags=["Auth"])
+async def login(payload: LoginPayload, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+
+    if user is None or user.role != "OFFICER" or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    if not verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()
+    token = create_access_token({"sub": user.id, "role": user.role})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "officer_id": user.id,
+        "display_name": user.display_name,
+    }
+
+
+@router.get("/auth/me", response_model=CurrentOfficerResponse, tags=["Auth"])
+async def current_officer(current_officer: dict = Depends(get_current_officer)):
+    return current_officer
 
 
 @router.post(
@@ -116,6 +169,7 @@ async def get_application_status(
 async def list_officer_applications(
     application_status: str = "PENDING_AUDIT",
     db: Session = Depends(get_db),
+    current_officer: dict = Depends(get_current_officer),
 ):
     applications = db.scalars(
         select(Application)
@@ -150,6 +204,7 @@ async def decide_application(
     application_id: str,
     payload: OfficerDecisionPayload,
     db: Session = Depends(get_db),
+    current_officer: dict = Depends(get_current_officer),
 ):
     application = db.get(Application, application_id)
 
