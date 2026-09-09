@@ -56,8 +56,17 @@ class PassportEyeOcr:
     """Extract and validate a passport TD3 MRZ with PassportEye and mrz."""
 
     def extract(self, image_bytes: bytes, mime_type: str) -> OcrResult:
-        from passporteye import read_mrz
-        from mrz.checker.td3 import TD3CodeChecker
+        try:
+            from passporteye import read_mrz  # type: ignore
+            from mrz.checker.td3 import TD3CodeChecker  # type: ignore
+        except Exception as imp_err:
+            return OcrResult(
+                status="ERROR",
+                provider="passporteye",
+                fields=_empty_fields(),
+                message=f"OCR provider missing or failed to import: {str(imp_err)}",
+                flags=["OCR_PROVIDER_ERROR", "MISSING_DEPENDENCY"],
+            )
 
         suffix = ".png" if mime_type == "image/png" else ".jpg"
         temporary_path: str | None = None
