@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.db.session import get_db
-from fastapi.middleware.cors import CORSMiddleware  # Added missing import
+from app.db.session import Base, engine, get_db
+from fastapi.middleware.cors import CORSMiddleware
+from app.routers.v1 import router as v1_router
+from app.models.application import Application
 
 app = FastAPI(
     title="Trust Pass API",
@@ -18,6 +20,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(v1_router)
+
+
+@app.on_event("startup")
+def create_tables():
+  Base.metadata.create_all(bind=engine)
 
 @app.get("/status", tags=["Health Check"])
 async def status_get(db: Session = Depends(get_db)):
@@ -37,3 +46,4 @@ async def status_get(db: Session = Depends(get_db)):
     "Backend": "online",
     "Database": db_status,
   }
+
