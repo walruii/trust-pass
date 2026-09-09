@@ -1,20 +1,24 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import base64
+import secrets
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from typing import Literal
-from sqlalchemy import select
+from sqlalchemy import exists, select, update
 from sqlalchemy.orm import Session
 
 from app.auth import create_access_token, verify_password, get_current_officer
 from app.db.session import get_db
 from app.models.application import Application
 from app.models.user import User
+from app.models.lease import ApplicationLease
+from app.models.audit import ApplicationAuditEvent
 from app.services.intake import create_application
 from app.services.pipeline import process_application
 
 router = APIRouter(prefix="/api/v1")
+LEASE_DURATION = timedelta(minutes=10)
 
 
 class KioskSubmitPayload(BaseModel):
@@ -38,30 +42,39 @@ class LoginResponse(BaseModel):
     token_type: str
     officer_id: str
     display_name: str
+    is_available: bool
 
 
 class CurrentOfficerResponse(BaseModel):
     officer_id: str
     display_name: str
     role: str
+    is_available: bool
 
 
-class ApplicationStatusResponse(BaseModel):
+class ApplicantStatusResponse(BaseModel):
     application_id: str
-    kiosk_id: str
     status: str
+    created_at: datetime
+    completed_at: datetime | None = None
+    decision_note: str | None = None
+
+
+class ApplicationStatusResponse(ApplicantStatusResponse):
+    kiosk_id: str
     pipeline_version: str
     attempt_count: int
-    created_at: datetime
     result_json: dict | None = None
     error_message: str | None = None
-    decision_note: str | None = None
 
 
 class OfficerApplicationResponse(ApplicationStatusResponse):
     passport_image: str | None = None
     selfie_image: str | None = None
     review_fields: dict
+    assigned_officer_id: str | None = None
+    lease_expires_at: datetime | None = None
+    claim_token: str | None = None
 
 
 class OfficerDecisionPayload(BaseModel):
@@ -72,6 +85,30 @@ class OfficerDecisionPayload(BaseModel):
 class OfficerDecisionResponse(BaseModel):
     application_id: str
     status: str
+
+
+class OfficerAvailabilityPayload(BaseModel):
+    available: bool
+
+
+class OfficerAvailabilityResponse(BaseModel):
+    officer_id: str
+    available: bool
+
+
+class NextApplicationResponse(BaseModel):
+    available: bool
+    application: OfficerApplicationResponse | None = None
+
+
+class AuditEventResponse(BaseModel):
+    event_type: str
+    actor_id: str | None
+    from_status: str | None
+    to_status: str | None
+    note: str | None
+    details: dict | None
+    created_at: datetime
 
 
 @router.post("/auth/login", response_model=LoginResponse, tags=["Auth"])
@@ -99,12 +136,37 @@ async def login(payload: LoginPayload, db: Session = Depends(get_db)):
         "token_type": "bearer",
         "officer_id": user.id,
         "display_name": user.display_name,
+        "is_available": user.is_available,
     }
 
 
 @router.get("/auth/me", response_model=CurrentOfficerResponse, tags=["Auth"])
 async def current_officer(current_officer: dict = Depends(get_current_officer)):
     return current_officer
+
+
+@router.post(
+    "/officer/availability",
+    response_model=OfficerAvailabilityResponse,
+    tags=["Officer"],
+)
+async def set_officer_availability(
+    payload: OfficerAvailabilityPayload,
+    db: Session = Depends(get_db),
+    current_officer: dict = Depends(get_current_officer),
+):
+    officer = db.get(User, current_officer["officer_id"])
+    officer.is_available = payload.available
+    db.add(
+        ApplicationAuditEvent(
+            actor_id=officer.id,
+            event_type="AVAILABILITY_CHANGED",
+            note="Officer became available" if payload.available else "Officer became unavailable",
+            details={"available": payload.available},
+        )
+    )
+    db.commit()
+    return {"officer_id": officer.id, "available": officer.is_available}
 
 
 @router.post(
@@ -133,7 +195,7 @@ async def kiosk_submit(
 
 @router.get(
     "/kiosk/applications/{application_id}",
-    response_model=ApplicationStatusResponse,
+    response_model=ApplicantStatusResponse,
     tags=["Kiosk"],
 )
 async def get_application_status(
@@ -148,15 +210,11 @@ async def get_application_status(
             detail="Application not found",
         )
 
-    return ApplicationStatusResponse(
+    return ApplicantStatusResponse(
         application_id=application.id,
-        kiosk_id=application.kiosk_id,
         status=application.status,
-        pipeline_version=application.pipeline_version,
-        attempt_count=application.attempt_count,
         created_at=application.created_at,
-        result_json=application.result_json,
-        error_message=application.error_message,
+        completed_at=application.completed_at,
         decision_note=application.decision_note,
     )
 
@@ -177,21 +235,105 @@ async def list_officer_applications(
         .order_by(Application.created_at.asc())
     ).all()
 
-    return [
-        OfficerApplicationResponse(
-            application_id=application.id,
-            kiosk_id=application.kiosk_id,
-            status=application.status,
-            pipeline_version=application.pipeline_version,
-            attempt_count=application.attempt_count,
-            created_at=application.created_at,
-            result_json=application.result_json,
-            error_message=application.error_message,
-            passport_image=_image_data_url(application, "passport"),
-            selfie_image=_image_data_url(application, "selfie"),
-            review_fields=_review_fields(application),
+    return [_officer_application_response(db, application, current_officer["officer_id"]) for application in applications]
+
+
+@router.post(
+    "/officer/applications/next",
+    response_model=NextApplicationResponse,
+    tags=["Officer"],
+)
+async def claim_next_application(
+    db: Session = Depends(get_db),
+    current_officer: dict = Depends(get_current_officer),
+):
+    now = datetime.now(timezone.utc)
+    active_lease = ApplicationLease.released_at.is_(None)
+    db.rollback()
+
+    officer = db.get(User, current_officer["officer_id"])
+    if officer is None or not officer.is_available:
+        return {"available": False, "application": None}
+    db.rollback()
+
+    with db.begin():
+        db.execute(
+            update(ApplicationLease)
+            .where(active_lease, ApplicationLease.lease_expires_at <= now)
+            .values(released_at=now)
         )
-        for application in applications
+        application = db.scalars(
+            select(Application)
+            .where(
+                Application.status == "PENDING_AUDIT",
+                ~exists(
+                    select(ApplicationLease.id).where(
+                        ApplicationLease.application_id == Application.id,
+                        active_lease,
+                    )
+                ),
+            )
+            .order_by(Application.created_at.asc(), Application.id.asc())
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        ).first()
+
+        if application is None:
+            return {"available": False, "application": None}
+
+        lease = ApplicationLease(
+            application_id=application.id,
+            officer_id=current_officer["officer_id"],
+            claim_token=secrets.token_urlsafe(32),
+            lease_expires_at=now + LEASE_DURATION,
+        )
+        db.add(lease)
+        db.add(
+            ApplicationAuditEvent(
+                application_id=application.id,
+                actor_id=current_officer["officer_id"],
+                event_type="APPLICATION_CLAIMED",
+                from_status=application.status,
+                to_status=application.status,
+                details={"lease_expires_at": lease.lease_expires_at.isoformat()},
+            )
+        )
+        db.flush()
+
+    return {
+        "available": True,
+        "application": _officer_application_response(
+            db, application, current_officer["officer_id"], lease
+        ),
+    }
+
+
+@router.get(
+    "/officer/applications/{application_id}/audit",
+    response_model=list[AuditEventResponse],
+    tags=["Officer"],
+)
+async def get_application_audit(
+    application_id: str,
+    db: Session = Depends(get_db),
+    current_officer: dict = Depends(get_current_officer),
+):
+    events = db.scalars(
+        select(ApplicationAuditEvent)
+        .where(ApplicationAuditEvent.application_id == application_id)
+        .order_by(ApplicationAuditEvent.created_at.asc())
+    ).all()
+    return [
+        {
+            "event_type": event.event_type,
+            "actor_id": event.actor_id,
+            "from_status": event.from_status,
+            "to_status": event.to_status,
+            "note": event.note,
+            "details": event.details,
+            "created_at": event.created_at,
+        }
+        for event in events
     ]
 
 
@@ -205,8 +347,9 @@ async def decide_application(
     payload: OfficerDecisionPayload,
     db: Session = Depends(get_db),
     current_officer: dict = Depends(get_current_officer),
+    claim_token: str = Header(..., alias="X-Claim-Token"),
 ):
-    application = db.get(Application, application_id)
+    application = db.get(Application, application_id, with_for_update=True)
 
     if application is None:
         raise HTTPException(
@@ -220,15 +363,129 @@ async def decide_application(
             detail="Only applications pending audit can receive a decision",
         )
 
+    lease = _get_owned_lease(db, application_id, current_officer["officer_id"], claim_token)
+    if lease is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Application is not actively claimed by this officer")
+
     application.status = payload.decision
     application.decision_note = payload.decision_note.strip() if payload.decision_note else None
+    application.decision_by = current_officer["officer_id"]
+    application.decision_at = datetime.now(timezone.utc)
     application.completed_at = datetime.now(timezone.utc)
+    lease.released_at = application.decision_at
+    db.add(
+        ApplicationAuditEvent(
+            application_id=application.id,
+            actor_id=current_officer["officer_id"],
+            event_type="APPLICATION_DECISION",
+            from_status="PENDING_AUDIT",
+            to_status=application.status,
+            note=application.decision_note,
+        )
+    )
     db.commit()
 
     return {
         "application_id": application.id,
         "status": application.status,
     }
+
+
+@router.post("/officer/applications/{application_id}/renew", tags=["Officer"])
+async def renew_application_lease(
+    application_id: str,
+    db: Session = Depends(get_db),
+    current_officer: dict = Depends(get_current_officer),
+    claim_token: str = Header(..., alias="X-Claim-Token"),
+):
+    lease = _get_owned_lease(db, application_id, current_officer["officer_id"], claim_token)
+    if lease is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Application lease is missing or expired")
+    lease.lease_expires_at = datetime.now(timezone.utc) + LEASE_DURATION
+    db.add(
+        ApplicationAuditEvent(
+            application_id=application_id,
+            actor_id=current_officer["officer_id"],
+            event_type="LEASE_RENEWED",
+            details={"lease_expires_at": lease.lease_expires_at.isoformat()},
+        )
+    )
+    db.commit()
+    return {"application_id": application_id, "lease_expires_at": lease.lease_expires_at}
+
+
+@router.post("/officer/applications/{application_id}/release", tags=["Officer"])
+async def release_application_lease(
+    application_id: str,
+    db: Session = Depends(get_db),
+    current_officer: dict = Depends(get_current_officer),
+    claim_token: str = Header(..., alias="X-Claim-Token"),
+):
+    lease = _get_owned_lease(db, application_id, current_officer["officer_id"], claim_token)
+    if lease is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Application lease is missing or expired")
+    lease.released_at = datetime.now(timezone.utc)
+    db.add(
+        ApplicationAuditEvent(
+            application_id=application_id,
+            actor_id=current_officer["officer_id"],
+            event_type="LEASE_RELEASED",
+        )
+    )
+    db.commit()
+    return {"application_id": application_id, "released": True}
+
+
+def _get_owned_lease(
+    db: Session,
+    application_id: str,
+    officer_id: str,
+    claim_token: str,
+) -> ApplicationLease | None:
+    return db.scalars(
+        select(ApplicationLease)
+        .where(
+            ApplicationLease.application_id == application_id,
+            ApplicationLease.officer_id == officer_id,
+            ApplicationLease.claim_token == claim_token,
+            ApplicationLease.released_at.is_(None),
+            ApplicationLease.lease_expires_at > datetime.now(timezone.utc),
+        )
+        .with_for_update()
+    ).first()
+
+
+def _officer_application_response(
+    db: Session,
+    application: Application,
+    officer_id: str,
+    lease: ApplicationLease | None = None,
+) -> OfficerApplicationResponse:
+    if lease is None:
+        lease = db.scalars(
+            select(ApplicationLease).where(
+                ApplicationLease.application_id == application.id,
+                ApplicationLease.released_at.is_(None),
+                ApplicationLease.lease_expires_at > datetime.now(timezone.utc),
+            )
+        ).first()
+    owns_lease = lease is not None and lease.officer_id == officer_id
+    return OfficerApplicationResponse(
+        application_id=application.id,
+        kiosk_id=application.kiosk_id,
+        status=application.status,
+        pipeline_version=application.pipeline_version,
+        attempt_count=application.attempt_count,
+        created_at=application.created_at,
+        result_json=application.result_json,
+        error_message=application.error_message,
+        passport_image=_image_data_url(application, "passport"),
+        selfie_image=_image_data_url(application, "selfie"),
+        review_fields=_review_fields(application),
+        assigned_officer_id=lease.officer_id if lease else None,
+        lease_expires_at=lease.lease_expires_at if lease else None,
+        claim_token=lease.claim_token if owns_lease else None,
+    )
 
 
 def _image_data_url(application: Application, image_type: str) -> str | None:

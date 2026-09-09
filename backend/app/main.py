@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers.v1 import router as v1_router
 from app.models.application import Application
 from app.models.user import User
+from app.models.lease import ApplicationLease
+from app.models.audit import ApplicationAuditEvent
 
 app = FastAPI(
     title="Trust Pass API",

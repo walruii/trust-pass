@@ -86,26 +86,23 @@ export default function CameraScanner() {
         setErrorMessage(data.error_message ?? null);
         if (data.status === "PENDING_AUDIT") {
           setStep("PENDING_AUDIT");
-          return;
-        }
-        if (data.status === "FAILED") {
+        } else if (data.status === "FAILED") {
           setStep("FAILED");
           return;
-        }
-        if (data.status === "APPROVED") {
+        } else if (data.status === "APPROVED") {
           setStep("DONE");
           return;
-        }
-        if (
+        } else if (
           data.status === "REJECTED_IMPROPER" ||
           data.status === "REJECTED_TAMPERING"
         ) {
           setErrorMessage(data.decision_note ?? null);
           setStep("REJECTED");
           return;
+        } else {
+          setStep("PROCESSING");
         }
 
-        setStep("PROCESSING");
         pollingTimeout = window.setTimeout(
           pollStatus,
           applicationPollingIntervalMs,

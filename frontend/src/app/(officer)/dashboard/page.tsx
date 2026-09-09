@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ApplicationCard, QueueEmptyState } from "./components";
@@ -8,6 +8,7 @@ import type { OfficerApplication } from "./types";
 
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const nextApplicationPollingIntervalMs = 15_000;
 
 export default function OfficerDashboard() {
   const [applications, setApplications] = useState<OfficerApplication[]>([]);
@@ -17,6 +18,10 @@ export default function OfficerDashboard() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginPending, setLoginPending] = useState(false);
+  const [claimPending, setClaimPending] = useState(false);
+  const [isAvailable, setIsAvailable] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
+  const claimInFlight = useRef(false);
 
   useEffect(() => {
     const restoreSession = window.setTimeout(() => {
@@ -25,8 +30,28 @@ export default function OfficerDashboard() {
     return () => window.clearTimeout(restoreSession);
   }, []);
 
-  const loadApplications = useCallback(async () => {
+  useEffect(() => {
     if (!accessToken) return;
+
+    const restoreAvailability = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/v1/auth/me`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!response.ok) throw new Error("Session expired");
+        const data = await response.json();
+        setIsAvailable(data.is_available ?? false);
+      } catch {
+        setAccessToken(null);
+        window.sessionStorage.removeItem("trust-pass.officer-token");
+      }
+    }, 0);
+
+    return () => window.clearTimeout(restoreAvailability);
+  }, [accessToken]);
+
+  const loadApplications = useCallback(async () => {
+    if (!accessToken || !showQueue) return;
 
     try {
       const response = await fetch(
@@ -50,7 +75,42 @@ export default function OfficerDashboard() {
       console.error("Officer queue request failed:", error);
       setErrorMessage("Unable to load the officer queue.");
     }
-  }, [accessToken]);
+  }, [accessToken, showQueue]);
+
+  const requestNextApplication = useCallback(async () => {
+    if (!accessToken || !isAvailable || claimInFlight.current) return;
+    claimInFlight.current = true;
+    setClaimPending(true);
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/officer/applications/next`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        },
+      );
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.detail ?? "Unable to assign application.");
+      if (!data.available || !data.application) {
+        setErrorMessage(null);
+        return;
+      }
+      setApplications((current) => [
+        data.application,
+        ...current.filter(
+          (item) => item.application_id !== data.application.application_id,
+        ),
+      ]);
+      setErrorMessage(null);
+    } catch (error) {
+      console.error("Application assignment failed:", error);
+      setErrorMessage("Unable to assign the next application.");
+    } finally {
+      claimInFlight.current = false;
+      setClaimPending(false);
+    }
+  }, [accessToken, isAvailable]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -71,6 +131,7 @@ export default function OfficerDashboard() {
         data.access_token,
       );
       setAccessToken(data.access_token);
+      setIsAvailable(data.is_available ?? false);
       setPassword("");
     } catch (error) {
       console.error("Officer login failed:", error);
@@ -81,6 +142,14 @@ export default function OfficerDashboard() {
   };
 
   const handleLogout = () => {
+    void fetch(`${apiBaseUrl}/api/v1/officer/availability`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ available: false }),
+    });
     window.sessionStorage.removeItem("trust-pass.officer-token");
     setAccessToken(null);
     setApplications([]);
@@ -91,6 +160,14 @@ export default function OfficerDashboard() {
     decision: "APPROVED" | "REJECTED_IMPROPER" | "REJECTED_TAMPERING",
     note: string,
   ) => {
+    const application = applications.find(
+      (item) => item.application_id === applicationId,
+    );
+    if (!application?.claim_token) {
+      setErrorMessage("Claim this application before making a decision.");
+      return;
+    }
+
     setDecisionPending(applicationId);
     try {
       const response = await fetch(
@@ -100,6 +177,7 @@ export default function OfficerDashboard() {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${accessToken}`,
+            "X-Claim-Token": application.claim_token,
           },
           body: JSON.stringify({ decision, decision_note: note || null }),
         },
@@ -114,11 +192,74 @@ export default function OfficerDashboard() {
         ),
       );
       setErrorMessage(null);
+      if (isAvailable) void requestNextApplication();
     } catch (error) {
       console.error("Officer decision failed:", error);
       setErrorMessage("Unable to save the officer decision.");
     } finally {
       setDecisionPending(null);
+    }
+  };
+
+  const setAvailability = async (available: boolean) => {
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/officer/availability`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ available }),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok)
+        throw new Error(data.detail ?? "Unable to update availability.");
+      setIsAvailable(data.available);
+    } catch (error) {
+      console.error("Availability update failed:", error);
+      setErrorMessage("Unable to update availability.");
+    }
+  };
+
+  const updateLease = async (
+    applicationId: string,
+    claimToken: string,
+    action: "renew" | "release",
+  ) => {
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/officer/applications/${applicationId}/${action}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "X-Claim-Token": claimToken,
+          },
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "Lease update failed.");
+
+      if (action === "release") {
+        setApplications((current) =>
+          current.filter((item) => item.application_id !== applicationId),
+        );
+        if (isAvailable) void requestNextApplication();
+      } else {
+        setApplications((current) =>
+          current.map((item) =>
+            item.application_id === applicationId
+              ? { ...item, lease_expires_at: data.lease_expires_at }
+              : item,
+          ),
+        );
+      }
+    } catch (error) {
+      console.error("Lease update failed:", error);
+      setErrorMessage("This application lease is no longer active.");
     }
   };
 
@@ -130,6 +271,32 @@ export default function OfficerDashboard() {
       window.clearInterval(interval);
     };
   }, [loadApplications]);
+
+  useEffect(() => {
+    if (
+      accessToken &&
+      isAvailable &&
+      !applications.some((item) => item.claim_token)
+    ) {
+      const initialAssignment = window.setTimeout(
+        () => void requestNextApplication(),
+        0,
+      );
+      const assignmentInterval = window.setInterval(
+        () => void requestNextApplication(),
+        nextApplicationPollingIntervalMs,
+      );
+
+      return () => {
+        window.clearTimeout(initialAssignment);
+        window.clearInterval(assignmentInterval);
+      };
+    }
+  }, [accessToken, applications, isAvailable, requestNextApplication]);
+
+  const visibleApplications = showQueue
+    ? applications
+    : applications.filter((application) => application.claim_token !== null);
 
   return (
     <main className="min-h-screen bg-slate-100 px-6 py-10 text-slate-900">
@@ -147,13 +314,34 @@ export default function OfficerDashboard() {
               decision.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
-          >
-            Sign out
-          </button>
+          {accessToken && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void setAvailability(!isAvailable)}
+                disabled={claimPending}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+              >
+                {isAvailable
+                  ? "Available for applications"
+                  : "Become available"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowQueue((current) => !current)}
+                className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+              >
+                {showQueue ? "Hide queue" : "Show queue"}
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="rounded-lg bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-300"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
         </header>
 
         {errorMessage && (
@@ -199,22 +387,32 @@ export default function OfficerDashboard() {
               {loginPending ? "Signing in..." : "Sign in"}
             </button>
           </form>
-        ) : applications.length === 0 ? (
-          <QueueEmptyState />
+        ) : visibleApplications.length === 0 ? (
+          <QueueEmptyState
+            message={
+              isAvailable
+                ? "No application is currently available."
+                : "Turn availability on to receive an application."
+            }
+          />
         ) : (
           <div className="space-y-6">
-            {applications.map((application) => (
+            {visibleApplications.map((application) => (
               <ApplicationCard
                 key={application.application_id}
                 application={application}
                 onDecision={decideApplication}
                 decisionPending={decisionPending === application.application_id}
+                onRelease={(id, token) =>
+                  void updateLease(id, token, "release")
+                }
+                onRenew={(id, token) => void updateLease(id, token, "renew")}
               />
             ))}
           </div>
         )}
 
-        {accessToken && (
+        {accessToken && showQueue && (
           <button
             type="button"
             onClick={() => void loadApplications()}

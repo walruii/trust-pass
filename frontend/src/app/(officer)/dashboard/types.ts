@@ -16,4 +16,7 @@ export type OfficerApplication = {
   passport_image: string | null;
   selfie_image: string | null;
   review_fields: Record<string, ReviewField>;
+  assigned_officer_id: string | null;
+  lease_expires_at: string | null;
+  claim_token: string | null;
 };

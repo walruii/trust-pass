@@ -15,6 +15,9 @@ Run the migrations in order:
 ```sh
 docker exec -i trust_pass_db psql -U postgres -d trust_pass_db < database/migrations/002_officer_decisions.sql
 docker exec -i trust_pass_db psql -U postgres -d trust_pass_db < database/migrations/003_officer_auth.sql
+docker exec -i trust_pass_db psql -U postgres -d trust_pass_db < database/migrations/004_application_leases.sql
+docker exec -i trust_pass_db psql -U postgres -d trust_pass_db < database/migrations/005_officer_availability.sql
+docker exec -i trust_pass_db psql -U postgres -d trust_pass_db < database/migrations/006_application_audit.sql
 ```
 
 Create a development officer interactively from the backend directory. The password is entered without being written to the repository:

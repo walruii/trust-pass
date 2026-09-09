@@ -62,6 +62,11 @@ def get_current_officer(
         if officer is None or not officer.is_active or officer.role != "OFFICER":
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-        return {"officer_id": officer.id, "role": officer.role, "display_name": officer.display_name}
+        return {
+            "officer_id": officer.id,
+            "role": officer.role,
+            "display_name": officer.display_name,
+            "is_available": officer.is_available,
+        }
     except jwt.PyJWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired or invalid")
