@@ -9,11 +9,9 @@ const fieldLabels: Record<string, string> = {
   nationality: "Nationality",
   issuing_country: "Issuing country",
   document_validation: "Document validation",
-  passport_exists_in_national_repository: "National repository match",
   face_match_score: "Face match score",
-  face_verification: "Face verification",
-  passport_anti_tamper_score: "Passport anti-tamper score",
-  tamper_detection: "Tamper detection",
+  risk_probability: "Risk probability",
+  fake_score: "Fake score",
   risk_verdict: "Risk verdict",
 };
 
@@ -35,6 +33,9 @@ export function ApplicationCard({
   onRenew: (applicationId: string, claimToken: string) => void;
 }) {
   const [decisionNote, setDecisionNote] = useState("");
+  const riskAssessment = application.result_json?.risk_assessment as
+    | { risk_probability?: number; fake_score?: number }
+    | undefined;
   return (
     <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 p-6">
@@ -53,6 +54,8 @@ export function ApplicationCard({
           {application.status}
         </span>
       </header>
+
+      <RiskSummary riskAssessment={riskAssessment} />
 
       <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
         <ImageEvidence application={application} />
@@ -178,6 +181,56 @@ export function ApplicationCard({
         </div>
       </footer>
     </article>
+  );
+}
+
+function RiskSummary({
+  riskAssessment,
+}: {
+  riskAssessment:
+    | { risk_probability?: number; fake_score?: number }
+    | undefined;
+}) {
+  const riskProbability = riskAssessment?.risk_probability;
+  const fakeScore = riskAssessment?.fake_score;
+
+  return (
+    <section className="grid gap-4 border-b border-slate-100 bg-slate-50 p-6 sm:grid-cols-2">
+      <RiskMetric
+        label="Risk probability"
+        value={
+          riskProbability === undefined
+            ? "Unavailable"
+            : `${(riskProbability * 100).toFixed(1)}%`
+        }
+        description="Estimated probability that the application needs risk review"
+      />
+      <RiskMetric
+        label="Fake score"
+        value={fakeScore === undefined ? "Unavailable" : `${fakeScore}/100`}
+        description="Combined score from MRZ, validation, tamper, and face signals"
+      />
+    </section>
+  );
+}
+
+function RiskMetric({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description: string;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">
+        {label}
+      </p>
+      <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+      <p className="mt-1 text-xs text-slate-500">{description}</p>
+    </div>
   );
 }
 

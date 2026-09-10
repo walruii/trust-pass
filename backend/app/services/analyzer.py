@@ -5,7 +5,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from app.services import document_ocr, face_module, mrz, risk_scorer, tamper_detection, validation
+from app.services import document_ocr, face_module, mrz, ocr as legacy_ocr, risk_scorer, tamper_detection, validation
 
 
 ANALYZER_VERSION = "1.0"
@@ -31,7 +31,7 @@ def analyze_document_images(
         result["errors"].append("Passport image is missing or unreadable")
         return result
 
-    ocr_result = _run_ocr(passport_image, result)
+    ocr_result = _run_ocr(passport_image, passport_mime_type, result)
     mrz_result = mrz.parse_td3_mrz(ocr_result["mrz_text"])
     merged_fields = document_ocr.extract_document_fields(passport_image, mrz_result)
     validation_result = validation.validate_fields(mrz_result)
@@ -106,17 +106,86 @@ def _image_metadata(image: np.ndarray | None, mime_type: str | None) -> dict[str
     }
 
 
-def _run_ocr(image: np.ndarray, result: dict[str, Any]) -> dict[str, Any]:
+def _run_ocr(
+    image: np.ndarray,
+    mime_type: str | None,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    passport_eye_results = []
+    valid_passport_eye = None
+    for candidate in (image, _upscale_for_ocr(image)):
+        encoded = cv2.imencode(".png" if mime_type == "image/png" else ".jpg", candidate)[1]
+        passport_eye = legacy_ocr.extract_passport_data(
+            encoded.tobytes(), mime_type or "image/jpeg"
+        )
+        passport_eye_results.append(passport_eye)
+        if passport_eye.get("mrz"):
+            parsed = mrz.parse_td3_mrz(passport_eye["mrz"])
+            if parsed.valid_format and parsed.all_checks_passed:
+                valid_passport_eye = passport_eye
+                break
+
+    if valid_passport_eye is not None:
+        return {
+            "provider": "passporteye",
+            "mrz_text": valid_passport_eye["mrz"],
+            "visual_zone_text": "",
+            "visual_text_top": "",
+            "passport_eye": valid_passport_eye,
+        }
+
+    passport_eye = next(
+        (item for item in passport_eye_results if item.get("mrz")),
+        passport_eye_results[0],
+    )
+
     try:
-        return document_ocr.extract_all(image)
+        fallback_results = [document_ocr.extract_all(candidate) for candidate in (image, _upscale_for_ocr(image))]
+        fallback = max(
+            fallback_results,
+            key=lambda item: _mrz_quality(item.get("mrz_text", "")),
+        )
+        fallback_quality = _mrz_quality(fallback.get("mrz_text", ""))
+        passport_eye_quality = _mrz_quality(passport_eye.get("mrz", ""))
+        if fallback_quality > passport_eye_quality:
+            return {"provider": "tesseract_fallback", **fallback, "passport_eye": passport_eye}
+        return {
+            "provider": "passporteye",
+            "mrz_text": passport_eye["mrz"],
+            "visual_zone_text": "",
+            "visual_text_top": "",
+            "passport_eye": passport_eye,
+        }
     except Exception as error:
         result["errors"].append(f"OCR failed: {error}")
-        return {"mrz_text": "", "visual_zone_text": "", "visual_text_top": ""}
+        return {
+            "provider": "none",
+            "mrz_text": "",
+            "visual_zone_text": "",
+            "visual_text_top": "",
+            "passport_eye": passport_eye,
+        }
+
+
+def _upscale_for_ocr(image: np.ndarray) -> np.ndarray:
+    return cv2.resize(image, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+
+
+def _mrz_quality(raw_mrz: str) -> tuple[int, int]:
+    parsed = mrz.parse_td3_mrz(raw_mrz)
+    if not parsed.valid_format:
+        return (0, 0)
+    return (1, sum(check.passed for check in parsed.checks))
 
 
 def _legacy_fields(mrz_result: mrz.MRZResult, merged_fields: dict[str, Any]) -> dict[str, Any]:
+    name = " ".join(
+        value
+        for value in (mrz_result.given_names, mrz_result.surname)
+        if value
+    ) or merged_fields.get("name") or merged_fields.get("given_names") or merged_fields.get("surname")
     return {
-        "name": mrz_result.surname or merged_fields.get("surname") or None,
+        "name": name or None,
         "surname": mrz_result.surname or merged_fields.get("surname") or None,
         "given_names": mrz_result.given_names or merged_fields.get("given_names") or None,
         "date_of_birth": mrz_result.date_of_birth or merged_fields.get("date_of_birth") or None,
@@ -199,7 +268,13 @@ def _run_face_check(
 def _run_risk(mrz_result, validation_result, tampering, face_result, result):
     try:
         risk = risk_scorer.score(mrz_result, validation_result, tampering, face_result)
-        return {"status": "flagged" if risk["fake_probability_percent"] >= 20 else "passed", **risk}
+        fake_score = risk["fake_probability_percent"]
+        return {
+            "status": "flagged" if fake_score >= 20 else "passed",
+            "risk_probability": round(fake_score / 100, 3),
+            "fake_score": fake_score,
+            **risk,
+        }
     except Exception as error:
         result["errors"].append(f"Risk assessment failed: {error}")
         return _stage("failed", str(error))

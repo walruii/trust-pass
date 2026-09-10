@@ -505,7 +505,6 @@ def _review_fields(application: Application) -> dict:
     ocr_fields = result.get("ocr", {}).get("fields", {})
     validation = result.get("validation", {})
     face = result.get("face_verification", {})
-    tampering = result.get("tampering", {})
     risk = result.get("risk_assessment", {})
 
     def field(value, status=None, matched=None):
@@ -523,24 +522,18 @@ def _review_fields(application: Application) -> dict:
             validation.get("status", "unavailable"),
             not validation.get("issues") if validation.get("status") else None,
         ),
-        "passport_exists_in_national_repository": field("Not configured", "unavailable"),
         "face_match_score": field(
-            face.get("similarity"),
+            f"{face['similarity'] * 100:.1f}%" if face.get("similarity") is not None else None,
             face.get("status", "unavailable"),
             face.get("match"),
         ),
-        "face_verification": field(
-            face.get("note") or face.get("status"),
-            face.get("status", "unavailable"),
-            face.get("match"),
-        ),
-        "passport_anti_tamper_score": field(
-            risk.get("fake_probability_percent"),
+        "risk_probability": field(
+            f"{risk['risk_probability'] * 100:.1f}%" if risk.get("risk_probability") is not None else None,
             risk.get("status", "unavailable"),
         ),
-        "tamper_detection": field(
-            "; ".join(tampering.get("metadata", {}).get("flags", [])) or tampering.get("status"),
-            tampering.get("status", "unavailable"),
+        "fake_score": field(
+            risk.get("fake_score"),
+            risk.get("status", "unavailable"),
         ),
         "risk_verdict": field(risk.get("verdict"), risk.get("status", "unavailable")),
     }
