@@ -6,9 +6,15 @@ const fieldLabels: Record<string, string> = {
   name: "Name",
   expiry: "Expiry date",
   passport_number: "Passport number",
+  nationality: "Nationality",
+  issuing_country: "Issuing country",
+  document_validation: "Document validation",
   passport_exists_in_national_repository: "National repository match",
   face_match_score: "Face match score",
+  face_verification: "Face verification",
   passport_anti_tamper_score: "Passport anti-tamper score",
+  tamper_detection: "Tamper detection",
+  risk_verdict: "Risk verdict",
 };
 
 export function ApplicationCard({
@@ -55,7 +61,7 @@ export function ApplicationCard({
             <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-slate-500">
               Review checklist
             </h3>
-            <span className="text-xs text-slate-400">AI results pending</span>
+            <span className="text-xs text-slate-400">Analyzer results</span>
           </div>
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
             {Object.entries(application.review_fields).map(([key, field]) => (
@@ -219,12 +225,23 @@ function EvidenceImage({
 }
 
 function ReviewRow({ label, field }: { label: string; field: ReviewField }) {
-  const state =
-    field.matched === null ? "AWAITING" : field.matched ? "MATCH" : "FLAG";
+  const state = field.status
+    ? field.status.toUpperCase()
+    : field.matched === null
+      ? "AWAITING"
+      : field.matched
+        ? "MATCH"
+        : "FLAG";
   const stateClasses = {
     MATCH: "bg-emerald-50 text-emerald-700",
     FLAG: "bg-red-50 text-red-700",
     AWAITING: "bg-slate-100 text-slate-500",
+    PASSED: "bg-emerald-50 text-emerald-700",
+    FLAGGED: "bg-red-50 text-red-700",
+    NOT_DETECTED: "bg-amber-50 text-amber-700",
+    NOT_RUN: "bg-slate-100 text-slate-500",
+    UNAVAILABLE: "bg-slate-100 text-slate-500",
+    FAILED: "bg-red-50 text-red-700",
   };
 
   return (
@@ -232,10 +249,10 @@ function ReviewRow({ label, field }: { label: string; field: ReviewField }) {
       <span className="text-sm text-slate-600">{label}</span>
       <div className="flex items-center gap-3">
         <span className="text-right text-sm font-semibold text-slate-900">
-          {field.value ?? "Not implemented"}
+          {field.value ?? "Unavailable"}
         </span>
         <span
-          className={`rounded-full px-2 py-1 text-[10px] font-bold tracking-wider ${stateClasses[state]}`}
+          className={`rounded-full px-2 py-1 text-[10px] font-bold tracking-wider ${stateClasses[state as keyof typeof stateClasses] ?? stateClasses.AWAITING}`}
         >
           {state}
         </span>

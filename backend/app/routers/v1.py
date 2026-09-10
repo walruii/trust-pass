@@ -501,16 +501,47 @@ def _image_data_url(application: Application, image_type: str) -> str | None:
 
 
 def _review_fields(application: Application) -> dict:
-    ocr_result = (application.result_json or {}).get("ocr", {})
-    ocr_fields = ocr_result.get("fields", {})
+    result = application.result_json or {}
+    ocr_fields = result.get("ocr", {}).get("fields", {})
+    validation = result.get("validation", {})
+    face = result.get("face_verification", {})
+    tampering = result.get("tampering", {})
+    risk = result.get("risk_assessment", {})
+
+    def field(value, status=None, matched=None):
+        return {"value": value, "status": status or ("passed" if value is not None else "unavailable"), "matched": matched}
 
     return {
-        "date_of_birth": {"value": ocr_fields.get("date_of_birth"), "matched": None},
-        "name": {"value": ocr_fields.get("name"), "matched": None},
-        "expiry": {"value": ocr_fields.get("expiry"), "matched": None},
-        "passport_number": {"value": ocr_fields.get("passport_number"), "matched": None},
-        "passport_exists_in_national_repository": {"value": "Not implemented", "matched": None},
-        "face_match_score": {"value": None, "matched": None},
-        "passport_anti_tamper_score": {"value": None, "matched": None},
+        "date_of_birth": field(ocr_fields.get("date_of_birth")),
+        "name": field(ocr_fields.get("name")),
+        "expiry": field(ocr_fields.get("expiry")),
+        "passport_number": field(ocr_fields.get("passport_number")),
+        "nationality": field(ocr_fields.get("nationality")),
+        "issuing_country": field(ocr_fields.get("issuing_country")),
+        "document_validation": field(
+            "; ".join(validation.get("issues", [])) or "No validation issues",
+            validation.get("status", "unavailable"),
+            not validation.get("issues") if validation.get("status") else None,
+        ),
+        "passport_exists_in_national_repository": field("Not configured", "unavailable"),
+        "face_match_score": field(
+            face.get("similarity"),
+            face.get("status", "unavailable"),
+            face.get("match"),
+        ),
+        "face_verification": field(
+            face.get("note") or face.get("status"),
+            face.get("status", "unavailable"),
+            face.get("match"),
+        ),
+        "passport_anti_tamper_score": field(
+            risk.get("fake_probability_percent"),
+            risk.get("status", "unavailable"),
+        ),
+        "tamper_detection": field(
+            "; ".join(tampering.get("metadata", {}).get("flags", [])) or tampering.get("status"),
+            tampering.get("status", "unavailable"),
+        ),
+        "risk_verdict": field(risk.get("verdict"), risk.get("status", "unavailable")),
     }
 

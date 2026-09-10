@@ -5,41 +5,21 @@ from sqlalchemy import update
 from app.db.session import SessionLocal
 from app.models.audit import ApplicationAuditEvent
 from app.models.application import Application
-from app.services.ocr import extract_passport_data
+from app.services.analyzer import analyze_document_images
 
 
-PIPELINE_VERSION = "1.0"
+PIPELINE_VERSION = "1.1"
 
 
 def run_placeholder_stages(application: Application) -> dict:
-    passport_image = next(
-        (image for image in application.images if image.image_type == "passport"),
-        None,
+    passport_image = next((image for image in application.images if image.image_type == "passport"), None)
+    selfie_image = next((image for image in application.images if image.image_type == "selfie"), None)
+    return analyze_document_images(
+        passport_bytes=passport_image.image_bytes if passport_image else None,
+        passport_mime_type=passport_image.mime_type if passport_image else None,
+        selfie_bytes=selfie_image.image_bytes if selfie_image else None,
+        selfie_mime_type=selfie_image.mime_type if selfie_image else None,
     )
-    ocr_result = (
-        extract_passport_data(passport_image.image_bytes, passport_image.mime_type)
-        if passport_image is not None
-        else {
-            "status": "MISSING_INPUT",
-            "provider": "none",
-            "fields": {},
-            "mrz": None,
-            "message": "Passport image is missing",
-        }
-    )
-
-    return {
-        "ocr": ocr_result,
-        "document_validation": {"status": "PENDING_IMPLEMENTATION"},
-        "anti_tampering": {"status": "PENDING_IMPLEMENTATION"},
-        "passport_photo_extraction": {"status": "PENDING_IMPLEMENTATION"},
-        "face_comparison": {"status": "PENDING_IMPLEMENTATION"},
-        "liveness": {"status": "PENDING_IMPLEMENTATION"},
-        "input": {
-            "image_count": len(application.images),
-            "image_types": sorted(image.image_type for image in application.images),
-        },
-    }
 
 
 def process_application(application_id: str) -> None:

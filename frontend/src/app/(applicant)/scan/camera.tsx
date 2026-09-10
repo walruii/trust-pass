@@ -6,6 +6,8 @@ import Webcam from "react-webcam";
 import {
   ActiveApplicationNotice,
   CameraCapture,
+  CaptureModeSelector,
+  FileCapture,
   ImageReview,
   ProcessingState,
   DecisionState,
@@ -22,6 +24,7 @@ const applicationPollingIntervalMs = 15_000;
 export default function CameraScanner() {
   const webcamRef = useRef<Webcam>(null);
   const [step, setStep] = useState<ScanStep>("PASSPORT");
+  const [captureMode, setCaptureMode] = useState<"LIVE" | "UPLOAD">("LIVE");
   const [passportImage, setPassportImage] = useState<string | null>(null);
   const [selfieImage, setSelfieImage] = useState<string | null>(null);
   const [applicationId, setApplicationId] = useState<string | null>(null);
@@ -43,7 +46,7 @@ export default function CameraScanner() {
 
   const captureFrame = useCallback(() => {
     return (
-      webcamRef.current?.getScreenshot({ width: 1280, height: 720 }) ?? null
+      webcamRef.current?.getScreenshot({ width: 1920, height: 1080 }) ?? null
     );
   }, []);
 
@@ -53,6 +56,24 @@ export default function CameraScanner() {
       setPassportImage(frame);
       setStep("SELFIE");
     }
+  };
+
+  const handleModeChange = (mode: "LIVE" | "UPLOAD") => {
+    setCaptureMode(mode);
+    setPassportImage(null);
+    setSelfieImage(null);
+    setErrorMessage(null);
+    setStep("PASSPORT");
+  };
+
+  const handlePassportFile = (dataUrl: string) => {
+    setPassportImage(dataUrl);
+    setStep("SELFIE");
+  };
+
+  const handleSelfieFile = (dataUrl: string) => {
+    setSelfieImage(dataUrl);
+    setStep("REVIEW");
   };
 
   const handleSelfieCapture = () => {
@@ -177,14 +198,26 @@ export default function CameraScanner() {
     <main className="flex min-h-screen flex-col items-center justify-center bg-slate-100 p-6 text-slate-900">
       <ScanHeader step={step} />
       {(step === "PASSPORT" || step === "SELFIE") && (
-        <CameraCapture
-          step={step}
-          webcamRef={webcamRef}
-          onPassportCapture={handlePassportCapture}
-          onSelfieCapture={handleSelfieCapture}
-          onBack={() => setStep("PASSPORT")}
-        />
+        <CaptureModeSelector mode={captureMode} onChange={handleModeChange} />
       )}
+      {(step === "PASSPORT" || step === "SELFIE") &&
+        (captureMode === "LIVE" ? (
+          <CameraCapture
+            step={step}
+            webcamRef={webcamRef}
+            onPassportCapture={handlePassportCapture}
+            onSelfieCapture={handleSelfieCapture}
+            onBack={() => setStep("PASSPORT")}
+          />
+        ) : (
+          <FileCapture
+            step={step}
+            onFileSelected={
+              step === "PASSPORT" ? handlePassportFile : handleSelfieFile
+            }
+            onBack={() => setStep("PASSPORT")}
+          />
+        ))}
       {step === "REVIEW" && passportImage && selfieImage && (
         <ImageReview
           passportImage={passportImage}

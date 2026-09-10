@@ -11,6 +11,75 @@ type CameraCaptureProps = {
   onBack: () => void;
 };
 
+export function CaptureModeSelector({
+  mode,
+  onChange,
+}: {
+  mode: "LIVE" | "UPLOAD";
+  onChange: (mode: "LIVE" | "UPLOAD") => void;
+}) {
+  return (
+    <div className="mb-5 flex rounded-lg border border-slate-300 bg-white p-1 text-sm">
+      <button
+        type="button"
+        onClick={() => onChange("LIVE")}
+        className={`flex-1 rounded-md px-4 py-2 font-semibold ${mode === "LIVE" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+      >
+        Use camera
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("UPLOAD")}
+        className={`flex-1 rounded-md px-4 py-2 font-semibold ${mode === "UPLOAD" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+      >
+        Upload files
+      </button>
+    </div>
+  );
+}
+
+export function FileCapture({
+  step,
+  onFileSelected,
+  onBack,
+}: {
+  step: "PASSPORT" | "SELFIE";
+  onFileSelected: (dataUrl: string) => void;
+  onBack: () => void;
+}) {
+  return (
+    <section className="w-full max-w-xl rounded-xl border border-slate-300 bg-white p-6 text-slate-900 shadow-sm">
+      <label className="block text-sm font-semibold text-slate-700">
+        {step === "PASSPORT" ? "Passport data page" : "Selfie image"}
+        <input
+          type="file"
+          accept="image/jpeg,image/png"
+          className="mt-3 block w-full rounded-lg border border-slate-300 p-3 text-sm"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+              if (typeof reader.result === "string")
+                onFileSelected(reader.result);
+            };
+            reader.readAsDataURL(file);
+          }}
+        />
+      </label>
+      {step === "SELFIE" && (
+        <button
+          type="button"
+          onClick={onBack}
+          className="mt-5 rounded-lg bg-slate-700 px-6 py-3 font-semibold text-white hover:bg-slate-600"
+        >
+          Back to passport
+        </button>
+      )}
+    </section>
+  );
+}
+
 export function ScanHeader({ step }: { step: ScanStep }) {
   const titles: Record<ScanStep, string> = {
     PASSPORT: "Step 1: Position Passport Data Page",
@@ -47,7 +116,7 @@ export function CameraCapture({
           audio={false}
           ref={webcamRef}
           screenshotFormat="image/jpeg"
-          videoConstraints={{ width: 1280, height: 720, facingMode: "user" }}
+          videoConstraints={{ width: 1920, height: 1080, facingMode: "user" }}
           className="h-full w-full object-cover"
         />
 

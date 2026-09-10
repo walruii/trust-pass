@@ -1,6 +1,7 @@
 export type ReviewField = {
   value: string | number | null;
   matched: boolean | null;
+  status?: string;
 };
 
 export type OfficerApplication = {
